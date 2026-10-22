@@ -99,7 +99,10 @@ try {
       output,
     ], { cwd: staged, encoding: "utf8" }),
   )[0];
-  const archivePath = path.join(output, packed.filename);
+  const filename =
+    `iroh-http-node-${manifest.version}-fork-application-signals-linux-win-x64.tgz`;
+  const archivePath = path.join(output, filename);
+  fs.renameSync(path.join(output, packed.filename), archivePath);
   const archive = fs.readFileSync(archivePath);
   const members = Object.fromEntries(
     expectedFiles.map((
@@ -135,7 +138,7 @@ try {
     baselineUrl:
       "https://github.com/arduano/iroh-http/releases/download/leo-v6-iroh-0.6.2-d799fa3/iroh-http-node-0.6.2-fork-linux-win-x64.tgz",
     baselineSha256,
-    filename: packed.filename,
+    filename,
     archiveSha256: sha256(archive),
     integrity: "sha512-" +
       createHash("sha512").update(archive).digest("base64"),
@@ -149,7 +152,7 @@ try {
   );
   fs.writeFileSync(
     path.join(output, "SHA256SUMS"),
-    `${receipt.archiveSha256}  ${packed.filename}\n`,
+    `${receipt.archiveSha256}  ${filename}\n`,
   );
   process.stdout.write(JSON.stringify(receipt, null, 2) + "\n");
 } finally {

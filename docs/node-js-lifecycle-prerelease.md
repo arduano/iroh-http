@@ -1,8 +1,11 @@
 # Node.js lifecycle prerelease
 
-`0.6.2-leo.20261022.1` adds application-owned process signal handling only in
-the Node.js TypeScript wrapper. The Rust transport, ABI, shared package and
-native source remain at `d799fa3f200b8ab862bad91ecd13a4389588111c`.
+The `leo-v7-iroh-0.6.2-js-lifecycle-20261022.1` owner prerelease adds
+application-owned process signal handling only in the Node.js TypeScript
+wrapper. Its numeric package version remains `0.6.2` to preserve the native
+consumer's exact package-identity contract; consumers distinguish the fork by
+the immutable release URL and integrity. The Rust transport, ABI, shared package
+and native source remain at `d799fa3f200b8ab862bad91ecd13a4389588111c`.
 
 The owner-fork archive is built with the exact Linux x64 GNU and Windows x64
 MSVC addons, generated native loader and declarations from the previously
