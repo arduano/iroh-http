@@ -32,6 +32,26 @@ function createNode(options?: NodeOptions): Promise<IrohNode>;
 
 See [NodeOptions](#nodeoptions) for the full option set.
 
+### Node.js process signal ownership
+
+The Node.js adapter additionally exports:
+
+```ts
+type ProcessSignalHandling = "standalone" | "application";
+function configureProcessSignalHandling(policy: ProcessSignalHandling): void;
+```
+
+The default `standalone` policy closes the module's endpoints and exits on
+`SIGTERM`/`SIGINT`, with the existing two-second force-exit deadline. Embedding
+applications select `application` before calling `createNode`; this removes only
+the adapter's own listeners and delegates signal handling, endpoint closure,
+other asynchronous cleanup, and process termination to the application. Other
+listeners remain installed. Invalid values throw `TypeError`. Repeating the
+current policy is idempotent; changing it while native endpoint creation, a live
+endpoint, or native endpoint closure is outstanding throws `Error`. The policy
+may change after all native endpoints close, even if application cleanup is
+still outstanding. This Node.js-specific API does not alter Rust, Deno or Tauri.
+
 ---
 
 ### `IrohNode`

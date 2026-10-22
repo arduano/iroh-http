@@ -90,25 +90,79 @@ import type {
 
 // ── Graceful shutdown tracking ─────────────────────────────────────────────────
 const _liveEndpoints = new Set<number>();
+let _pendingEndpointCreations = 0;
+let _processSignalHandling: ProcessSignalHandling = "standalone";
+
+/** Who owns SIGTERM/SIGINT cleanup and process termination in Node.js. */
+export type ProcessSignalHandling = "standalone" | "application";
+
+/**
+ * Configure process signal ownership before creating any nodes.
+ *
+ * The default `standalone` policy closes this module's endpoints and exits on
+ * SIGTERM/SIGINT (with a two-second deadline). `application` removes only this
+ * module's signal handlers: the application must handle signals, close every
+ * node, finish its other asynchronous cleanup, and decide when to terminate.
+ * Other libraries' and applications' listeners are never removed.
+ *
+ * Repeating the current policy is harmless. Changing it while a native endpoint
+ * is being created, is open, or its native close is pending throws. After every
+ * native endpoint closes it may change; the application's other cleanup remains
+ * its responsibility.
+ */
+export function configureProcessSignalHandling(
+  policy: ProcessSignalHandling,
+): void {
+  if (policy !== "standalone" && policy !== "application") {
+    throw new TypeError(
+      "process signal handling must be standalone or application",
+    );
+  }
+  if (policy === _processSignalHandling) return;
+  if (_pendingEndpointCreations !== 0 || _liveEndpoints.size !== 0) {
+    throw new Error(
+      "configure process signal handling before creating nodes or after all nodes close",
+    );
+  }
+  if (policy === "application") {
+    process.removeListener("SIGTERM", _onSigterm);
+    process.removeListener("SIGINT", _onSigint);
+  } else {
+    process.once("SIGTERM", _onSigterm);
+    process.once("SIGINT", _onSigint);
+  }
+  _processSignalHandling = policy;
+}
 
 function _closeAllEndpoints(signal: string): void {
   const handles = [..._liveEndpoints];
-  _liveEndpoints.clear();
   if (handles.length === 0) return;
   const deadline = setTimeout(
     () => process.exit(128 + (signal === "SIGTERM" ? 15 : 2)),
     2000,
   );
   if (deadline.unref) deadline.unref();
-  Promise.all(handles.map((h) => closeEndpoint(h, true).catch(() => {}))).then(
+  Promise.all(
+    handles.map((h) =>
+      closeEndpoint(h, true).catch(() => {}).finally(() => {
+        _liveEndpoints.delete(h);
+      })
+    ),
+  ).then(
     () => {
       process.exit(0);
     },
   );
 }
 
-process.once("SIGTERM", () => _closeAllEndpoints("SIGTERM"));
-process.once("SIGINT", () => _closeAllEndpoints("SIGINT"));
+function _onSigterm(): void {
+  _closeAllEndpoints("SIGTERM");
+}
+function _onSigint(): void {
+  _closeAllEndpoints("SIGINT");
+}
+process.once("SIGTERM", _onSigterm);
+process.once("SIGINT", _onSigint);
 
 // ── NodeAdapter ────────────────────────────────────────────────────────────────
 
@@ -333,8 +387,9 @@ class NodeAdapter extends IrohAdapter {
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
   closeEndpoint(handle: number, force?: boolean): Promise<void> {
-    _liveEndpoints.delete(handle);
-    return closeEndpoint(handle, force ?? null);
+    return closeEndpoint(handle, force ?? null).then(() => {
+      _liveEndpoints.delete(handle);
+    });
   }
   stopServe(handle: number): void {
     this.#serveStopRequested = true;
@@ -584,34 +639,40 @@ export async function createNode(
     ? Array.isArray(options.bindAddr) ? options.bindAddr : [options.bindAddr]
     : undefined;
 
-  const info = await createEndpoint(
-    options
-      ? {
-        key: keyBytes,
-        idleTimeout: options.connections?.idleTimeoutMs,
-        relayMode,
-        relays: relays ?? undefined,
-        relayAuthToken,
-        bindAddrs,
-        dnsDiscovery: discovery.dnsServerUrl ?? undefined,
-        dnsDiscoveryEnabled: discovery.dnsEnabled,
-        channelCapacity: options.internals?.channelCapacity,
-        maxChunkSizeBytes: options.internals?.maxChunkSizeBytes,
-        handleTtl: options.internals?.handleTtl,
-        maxPooledConnections: options.connections?.maxPooled,
-        poolIdleTimeoutMs: options.connections?.poolIdleTimeoutMs,
-        disableNetworking: disableNetworkingFinal,
-        proxyUrl: options.proxy?.url,
-        proxyFromEnv: options.proxy?.fromEnv,
-        keylog: options.debug?.keylog,
-        compressionLevel: compression.level,
-        compressionMinBodyBytes: compression.minBodyBytes,
-        maxHeaderBytes: options.limits?.maxHeaderBytes,
-      }
-      : undefined,
-  ).catch((e: unknown) => {
-    throw classifyBindError(e);
-  });
+  _pendingEndpointCreations++;
+  let info: Awaited<ReturnType<typeof createEndpoint>>;
+  try {
+    info = await createEndpoint(
+      options
+        ? {
+          key: keyBytes,
+          idleTimeout: options.connections?.idleTimeoutMs,
+          relayMode,
+          relays: relays ?? undefined,
+          relayAuthToken,
+          bindAddrs,
+          dnsDiscovery: discovery.dnsServerUrl ?? undefined,
+          dnsDiscoveryEnabled: discovery.dnsEnabled,
+          channelCapacity: options.internals?.channelCapacity,
+          maxChunkSizeBytes: options.internals?.maxChunkSizeBytes,
+          handleTtl: options.internals?.handleTtl,
+          maxPooledConnections: options.connections?.maxPooled,
+          poolIdleTimeoutMs: options.connections?.poolIdleTimeoutMs,
+          disableNetworking: disableNetworkingFinal,
+          proxyUrl: options.proxy?.url,
+          proxyFromEnv: options.proxy?.fromEnv,
+          keylog: options.debug?.keylog,
+          compressionLevel: compression.level,
+          compressionMinBodyBytes: compression.minBodyBytes,
+          maxHeaderBytes: options.limits?.maxHeaderBytes,
+        }
+        : undefined,
+    ).catch((e: unknown) => {
+      throw classifyBindError(e);
+    });
+  } finally {
+    _pendingEndpointCreations--;
+  }
 
   const eh = info.endpointHandle;
   _liveEndpoints.add(eh);

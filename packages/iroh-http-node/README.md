@@ -56,6 +56,43 @@ sessions, mDNS discovery, and Ed25519 crypto. See the
 - Serve callbacks run on the Node.js event loop via napi-rs
   `ThreadsafeFunction`.
 
+### Process signals in an embedded application
+
+By default the Node adapter handles `SIGTERM` and `SIGINT`, closes its
+endpoints, and exits the process with status zero. A two-second deadline forces
+termination with the signal's conventional exit status if closing stalls. This
+standalone policy can interrupt asynchronous shutdown in an embedding
+application.
+
+Applications that own shutdown must configure signal ownership before the first
+`createNode()` call:
+
+```ts
+import {
+  configureProcessSignalHandling,
+  createNode,
+} from "@momics/iroh-http-node";
+
+configureProcessSignalHandling("application");
+const node = await createNode();
+process.once("SIGTERM", async () => {
+  await node.close();
+  await finishApplicationCleanup(); // For example, await owned child processes.
+  process.exitCode = 0;
+});
+```
+
+`configureProcessSignalHandling(policy: "standalone" | "application"): void`
+affects only this module instance. Application mode removes only the adapter's
+own signal handlers and never calls `process.exit()` on signals. The application
+must handle its signals, close all nodes, drain other work, and terminate. Other
+listeners are preserved. Repeating the selected policy is idempotent; changing
+it while a native endpoint is being created, is open, or its native close is
+pending throws. It can be changed after every native endpoint has closed;
+application cleanup can still be outstanding. Invalid policies throw
+`TypeError`. The exported `ProcessSignalHandling` type describes both supported
+policies.
+
 ## Other runtimes
 
 | Runtime  | Package                                                                            |
